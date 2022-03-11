@@ -1,0 +1,379 @@
+---
+title: "MLL Differentially Expressed Genes"
+author: "Jenny Smith"
+date: "May 8, 2017"
+output:
+  html_document: default
+  pdf_document:
+    latex_engine: xelatex
+---
+
+Purpose to investigate whether DEGs in MLL/KMT2A translocations may have a unique gene signature. MLL/KMT2A is a lysine methyl-transferase on chromosome 11 and is a distict, recurrent cytogenetic abnormality in ~20-24% of pediatric AML patients. 
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = '~/RNA_seq_Analysis/2017.05.08_MLL_DE/')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(RColorBrewer)
+library(colorspace)
+library(stringr)
+library(dplyr)
+library(magrittr)
+library(tables)
+library(VennDiagram)
+library(gtools)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/Limma_DE_Function.r")
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/Expression_Distribution_Plots_Function.r")
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/DESEq2_DE_Function.r")
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/clusterAnalysis_Function.r")
+```
+
+
+#Read in the clinical annotations
+```{r}
+clinData <- read.csv("~/reference_mapping-files/New_stratification_outcomes_updated_2017.03.28.csv", stringsAsFactors = FALSE, row.names = 1)
+```
+
+```{r}
+head(clinData[,50:57])
+```
+
+
+#Read in the Expression Data
+
+The 494 low depth RNA-sequencing. Using batch corrected data. 
+```{r}
+LD <- get(load("~/RNA_seq_Analysis/2017.05.08_MLL_DE/ExpressionData/combatAdjustedExp.RData"))
+LD[which(LD < 0, arr.ind=TRUE)] <- 0
+
+dim(LD)
+```
+
+```{r}
+head(LD[,1:5])
+```
+
+```{r}
+TPM <- get(load("~/RNA_seq_Analysis/2017.05.08_MLL_DE/ExpressionData/TARGET_AML_TPM_withGenesasRowNames_BCCA28Apr2016.RData"))
+dim(TPM)
+```
+
+```{r}
+head(TPM)
+```
+
+
+#Define Groups
+
+```{r}
+GroupIDs <- function(clinData, col){
+  list <- list()
+  grps <- unique(clinData[,col])
+  N <- length(grps)
+  
+  for (i in 1:N){
+    IDs <- rownames(clinData[grepl(grps[i], clinData[,col]), ])
+    list[[i]] <- IDs
+  }
+  names(list) <- grps
+  return(list)
+}
+```
+
+
+```{r}
+groups <- GroupIDs(clinData, "MLL")
+
+summary(groups)
+```
+
+
+
+#Differential Expression Using Limma 
+
+```{r}
+length(which( colnames(LD) %in%  groups$Yes))
+g1 <- colnames(LD)[which(colnames(LD) %in% groups$Yes)]
+g1
+```
+
+```{r}
+length(which(colnames(LD) %in% groups$No))
+g2 <- colnames(LD)[which(colnames(LD) %in% groups$No)]
+g2
+```
+
+#Differential Expression between MLL and nonMLL AML patients
+
+Using limma trend with batch corrected reads. 
+```{r}
+DE <- calcDE(LD[,c(g1,g2)], g1, g2, logCPM=FALSE)
+
+summary(DE)
+```
+
+```{r}
+dim(DE$dge)
+```
+
+There are 17,839 genes with cpm > 1 in at least 5% of samples. 
+
+```{r}
+DE$design[1:60,] #g1 - g2, so MLL - nonMLL is differential expression contrast
+```
+
+```{r}
+dim(DE$DE) #1,516 DEGs
+```
+
+```{r}
+DE$DE$FoldChange <- logratio2foldchange(DE$DE$logFC)
+```
+
+
+```{r}
+# write.csv(DE$DE, file="TARGET_AML_MLLvsNonMLL_DEGs.csv")
+
+```
+
+
+#Differentially Expression between MLL and Normal BM
+
+```{r}
+BM <- grep("^BM", colnames(LD), value = TRUE)
+
+BM
+```
+
+
+```{r}
+DE_BM <- calcDE(LD[,c(g1,BM)], g1,BM, logCPM = FALSE)
+
+summary(DE_BM)
+```
+
+
+```{r}
+dim(DE_BM$dge) 
+# colnames(DE_BM$dge)
+```
+
+
+```{r}
+DE_BM$design
+```
+
+
+```{r}
+dim(DE_BM$DE) #7480
+```
+
+```{r}
+DE_BM$DE$FoldChange <- logratio2foldchange(DE_BM$DE$logFC)
+```
+
+
+```{r}
+# write.csv(DE_BM$DE, file="TARGET_AML_MLLvsNormalBM_DEGs.csv")
+```
+
+#nMDS Cluster Analysis
+
+```{r}
+MLL <- g1
+NonMLL <- g2
+
+MLLvNon_pheno <- phenoVectors(MLL,NonMLL)
+MLLvBM_pheno <- phenoVectors(MLL,BM)
+
+
+MLLvNon_pheno[1:10]
+```
+
+
+```{r message=FALSE, warning=FALSE}
+#using DEGs as gene list.
+#Expression values are in log2 scale
+MLLvsNon <- expnDist(LD, MLLvNon_pheno, rownames(DE$DE),unit="Batch Corrected Reads", BM=FALSE,logCPM = FALSE, plot=FALSE)
+MLLvsBM <- expnDist(LD,MLLvBM_pheno,rownames(DE_BM$DE),unit="Batch Corrected Reads", logCPM = FALSE,plot=FALSE)
+
+dim(MLLvsBM)
+dim(MLLvsNon)
+```
+
+```{r message=FALSE,warning=FALSE}
+MLLvsNon_TPM <- expnDist(TPM, MLLvNon_pheno, rownames(DE$DE), unit="TPM")
+
+MLLvsBM_TPM <- expnDist(TPM, MLLvBM_pheno,rownames(DE_BM$DE), unit="TPM")
+
+dim(MLLvsNon_TPM)
+dim(MLLvsBM_TPM)
+
+# write.csv(MLLvsNon_TPM, "TARGET_AML_MLLvsNonMLL_DEGs_TPM_ExpnMatrix.csv")
+# write.csv(MLLvsBM_TPM, "TARGET_AML_MLLvsNormalBM_DEGs_TPM_ExpnMatrix.csv")
+```
+
+
+```{r}
+# write.csv(MLLvsNon,"TARGET_AML_MLLvsNonMLL_DEGs_ExpnMatrix.csv")
+# write.csv(MLLvsBM, "TARGET_AML_MLLvsBM_DEGs_ExpnMatrix.csv")
+```
+
+
+Add the clinical information with the fusion partners
+```{r}
+head(clinData[,1:5])
+```
+
+
+```{r}
+library(vegan)
+
+PCoA <- capscale(MLLvsNon[,1:1516] ~ 1, distance = "bray", add=TRUE)
+PCoA_BM <- capscale(MLLvsBM[,1:7479] ~ 1, distance = "bray", add=TRUE)
+
+# head(summary(PCoA))
+```
+
+Function capscale is based on Legendre & Anderson (1999): the dissimilarity data are first ordinated using metric scaling, and the ordination results are analysed with rda.Function rda  uses ordinary, unweighted linear regression and unweighted SVD. 
+
+```{r}
+scores <- as.data.frame(scores(PCoA, display = "sites"))
+
+scoresBM <- as.data.frame(scores(PCoA_BM, display = "sites"))
+
+# head(scores)
+```
+
+
+```{r}
+p <- ggplot(scores, aes(x=MDS1, MDS2))
+
+p <- p + geom_point(aes(color=MLLvsNon$Status),size=0.8) + 
+  theme_bw() + 
+  labs(title="MDS Plot of MLL and Non-MLL AML") + 
+  scale_color_manual(values = c("MLL"="deeppink1", "NonMLL"="black"))
+
+# pdf(file="MDS_MLLvsNonMLL_AML.pdf")
+p
+# dev.off()
+```
+
+
+```{r}
+BMPlot <- ggplot(scoresBM, aes(x=MDS1, y=MDS2)) + 
+  geom_point(aes(color=MLLvsBM$Status)) + 
+  theme_bw() +
+  labs(title="MDS Plot of MLL and Normal BM") +
+  scale_color_manual(values = c("MLL"="deeppink1", "BM"="orangered3"))
+
+# pdf(file="MDS_MLLvsBM.pdf")
+BMPlot
+# dev.off()
+```
+
+```{r}
+head(scores)
+```
+
+```{r}
+aov <- aov(scores$MDS1 ~ MLLvsNon$Status)
+aovBM <- aov(scoresBM$MDS1 ~ MLLvsBM$Status)
+
+summary(aov)
+summary(aovBM)
+```
+
+```{r}
+for (i in 1:4){
+  plot(aov, which=i)  
+}
+```
+
+##Limma MDS plot
+```{r}
+colorbar <- ifelse(MLLvNon_pheno == "MLL", "red", "blue")
+plotMDS(DE$dge, col=colorbar, cex=0.5, top=500)
+```
+
+
+#Non-Metric MDS 
+
+```{r}
+dist <- vegdist(MLLvsNon[,1:1516])
+```
+
+```{r}
+library(MASS)
+nMDS <- isoMDS(dist,k=3)
+```
+
+```{r}
+stressplot(nMDS, dist)
+```
+
+```{r message=FALSE, warning=FALSE}
+ordiplot(nMDS, typ="t")
+```
+
+
+#PCA 
+
+```{r message=FALSE, warning=FALSE}
+dds <- DEGs_DESeq(LD, MLLvNon_pheno,"NonMLL")
+dds_BM <- DEGs_DESeq(LD, MLLvBM_pheno, "BM")
+```
+
+
+```{r}
+dim(dds$Filt_Res) #2480 on local, 2846 on rhino
+dim(dds_BM$Filt_Res) # --- on local, 7407 on rhino
+```
+
+```{r}
+vst <- vst(dds$dds)
+vst_BM <- vst(dds_BM$dds)
+```
+
+```{r}
+dim(assay(vst))
+```
+
+
+```{r}
+plotPCA(vst,intgroup="Status")
+plotPCA(vst_BM,intgroup="Status")
+```
+
+
+```{r}
+pcaDat <- plotPCA(vst,intgroup="Status", returnData=TRUE)
+
+head(pcaDat)
+```
+
+
+#Comparison of the two methods: Limma and DESeq2
+
+```{r}
+venn.diagram(list(Limma=rownames(DE$DE), DESeq2=rownames(dds$Filt_Res)),
+             filename = "TARGET_AML_MLLvsNonMLL_limma_DESeq2.tiff",
+             imagetype = "tiff",
+             print.mode = c("raw", "percent"),
+             main="DEGs between MLL and Non-MLL AML: Limma and DESEq2")
+```
+
+
+
+
+
+
